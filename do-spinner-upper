@@ -1,0 +1,203 @@
+#!/usr/bin/env zsh
+
+## Begin parsing arguments
+
+zparseopts -D -E -- -name:=name -ip:=floating_ip -size:=droplet_size -region:=region -help:=help
+
+cmd=$1
+name=$name[2]
+floating_ip=$floating_ip[2]
+droplet_size=$droplet_size[2]
+region=$region[2]
+
+snapshot_name="$name-snapshot"
+
+if [ -z $help[1] ]; then
+  help=false
+else
+  help=true
+fi
+
+## End parsing arguments
+
+snapshot_id () {
+  doctl compute image list -ojson | jq --arg name $snapshot_name '.[] | select(.name == $name).id' -r
+}
+
+create_droplet () {
+  doctl compute droplet create \
+    --image $image \
+    --size $droplet_size \
+    --region $region \
+    --wait \
+    --enable-monitoring \
+    --output json \
+    $name | jq '.[0].id' -r
+}
+
+existing_droplet () {
+  doctl compute droplet list -ojson | jq --arg name $name '.[] | select(.name == $name).id' -r
+}
+
+assign_ip () {
+  echo "Assigning IP $floating_ip to droplet $1"
+  local res=$(doctl compute floating-ip-action assign $floating_ip $1 -o json)
+
+  local error=$(echo $res | jq 'if type=="object" and .errors then .errors[0].detail else "Unknown error" end' -r)
+  local op_id=$(echo $res | jq 'if type=="array" then .[0].id else "empty" end' -r)
+  if [ $error != "Unknown error" || $op_id = "empty" ]; then
+    echo "$error"
+    echo "Failed command: \`doctl compute floating-ip-action assign $floating_ip $1 -o json\`"
+    exit 1
+  fi
+
+  get_status () {
+    doctl compute floating-ip-action get $floating_ip $op_id -o json | jq '.[0].status' -r
+  }
+
+  local assign_status=$(get_status)
+
+  for i in {1..5}; do
+    sleep 1
+    assign_status=$(get_status)
+    echo "IP assignment $assign_status"
+
+    if [ "$assign_status" = "completed" ]; then break; fi
+  done
+
+  if [ "$assign_status" != "completed" ]; then
+    echo "IP Assignment incomplete"
+    exit 1
+  fi
+}
+
+up () {
+  local existing_droplet=$(existing_droplet)
+  local droplet_id
+
+  if [ -z $existing_droplet ]; then
+    echo "Creating $name droplet"
+    local image=$(snapshot_id)
+
+    if [ -z $image ]; then
+      echo "Could not find snapshot"
+      exit 1
+    else
+      echo "Using snapshot $image"
+    fi
+
+    droplet_id="$(create_droplet $image)"
+
+    echo "Created droplet $droplet_id"
+  else
+    droplet_id="$existing_droplet"
+    echo "Using droplet $droplet_id"
+  fi
+
+  if [ -n "$floating_ip" ]; then
+    assign_ip $droplet_id
+  fi
+}
+
+droplet_status () {
+  doctl compute droplet get -ojson $1 | jq '.[0].status' -r
+}
+
+power_down () {
+  doctl compute droplet-action power-off $1 --wait -ojson > /dev/null
+  echo "Powered down droplet $1"
+}
+
+check_status () {
+  if [ -z $1 ]; then
+    echo 'Could not find existing droplet'
+    exit 1
+  fi
+
+  if [ $(droplet_status $1) = "active" ]; then
+    if read -q "confirm_power?Do you want to power down your droplet? (y/N) "; then
+      power_down $1
+    else
+      exit 1
+    fi
+  fi
+}
+
+create_snapshot () {
+  echo "Creating snapshot (this could take a few minutes...)"
+  doctl compute droplet-action snapshot $droplet_id --wait --snapshot-name $snapshot_name > /dev/null
+  echo "Created snapshot $snapshot_name"
+}
+
+delete_droplet () {
+  doctl compute droplet delete $1 --force
+  echo "Deleted droplet $1"
+}
+
+delete_snapshot () {
+  doctl compute image delete $1 --force
+  echo "Deleted snapshot $1"
+}
+
+down () {
+  local existing_snapshot=$(snapshot_id)
+  local droplet_id=$(existing_droplet)
+
+  check_status $droplet_id
+
+  if read -q "confirm_delete?Are you sure you want to delete droplet $droplet_id? (y/N) "; then
+    echo ''
+  else
+    exit 0
+  fi
+
+  create_snapshot
+  delete_droplet $droplet_id
+
+  if [ -n $existing_snapshot ]; then
+    delete_snapshot $existing_snapshot
+  fi
+}
+
+help () {
+  echo 'spinner-upper is a command line tool to automatically spin up and down Digital Ocean droplets'
+  echo ''
+  echo 'Usage:'
+  echo '  spinner-upper <command> [flags]'
+  echo ''
+  echo 'Available commands:'
+  echo '  up    Create a new droplet from the last snapshot'
+  echo '  down  Save a snapshot and destroy the droplet'
+  echo ''
+  echo 'Flags:'
+  echo '  --name    name'
+  echo '  --ip      floating IP'
+  echo '  --size    droplet size'
+  echo '  --region  region'
+}
+
+run () {
+  if $help || [ -z $cmd ] || [ $cmd = "--help" ]; then help
+  elif [ "$cmd" = "up" ]; then
+    if [ -z $name ] \
+    || [ -z $droplet_size ] \
+    || [ -z $region ]
+    then
+      echo '--name, --size & --region arguments required. Use --help to learn more'
+    else
+      up
+    fi
+  elif [ "$cmd" = "down" ]; then
+    if [ -z $name ]
+    then
+      echo '--name argument required. Use --help to learn more'
+    else
+      down
+    fi
+  else
+    echo "Command $cmd not recognised."
+    echo 'Use --help flag to learn more.'
+  fi
+}
+
+run
