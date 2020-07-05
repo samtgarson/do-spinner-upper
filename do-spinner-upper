@@ -5,7 +5,7 @@ colors
 
 ## Begin parsing arguments
 
-zparseopts -D -E -- -name:=name -ip:=floating_ip -size:=droplet_size -region:=region -key:=ssh_key -help:=help
+zparseopts -D -E -- -name:=name -ip:=floating_ip -size:=droplet_size -region:=region -key:=ssh_key
 
 cmd=$1
 name=$name[2]
@@ -13,14 +13,20 @@ floating_ip=$floating_ip[2]
 droplet_size=$droplet_size[2]
 region=$region[2]
 ssh_key=$ssh_key[2]
+help=false
+force=false
+
+for arg in $*; do
+  if [ $arg = "--help" ]; then
+    help=true
+  fi
+
+  if [ $arg = "--force" ]; then
+    force=true
+  fi
+done
 
 snapshot_name="$name-snapshot"
-
-if [ -z $help[1] ]; then
-  help=false
-else
-  help=true
-fi
 
 ## End parsing arguments
 
@@ -131,7 +137,7 @@ check_status () {
 
   if [ $(droplet_status $1) = "active" ]; then
     warning "Your droplet should be powered down before snapshotting."
-    if read -q "?$prompt Do you want to power down your droplet? (y/N) "; then
+    if $force || read -q "?$prompt Do you want to power down your droplet? (y/N) "; then
       echo
       l "Powering down droplet `highlight $1`"
       power_down $1
@@ -194,7 +200,7 @@ down () {
 
   check_status $droplet_id || exit 1
 
-  if read -q "confirm_delete?$prompt Are you sure you want to delete droplet `highlight $droplet_id`? (y/N) "; then
+  if $force || read -q "confirm_delete?$prompt Are you sure you want to delete droplet `highlight $droplet_id`? (y/N) "; then
     echo
   else
     echo $confirm_delete

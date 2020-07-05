@@ -5,6 +5,10 @@
 
 <p align="center">spinner-upper is a command line tool to automatically spin up and down Digital Ocean droplets.</p>
 
+<hr />
+
+</p>
+
 It will:
 - Delete your droplet but save the state of your droplet in a snapshot
 - Recreate your droplet from a snapshot, including SSH keys
