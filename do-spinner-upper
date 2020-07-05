@@ -149,8 +149,15 @@ check_status () {
 
 create_snapshot () {
   l "Creating snapshot (this could take a few minutes...)"
-  doctl compute droplet-action snapshot $droplet_id --wait --snapshot-name $snapshot_name > /dev/null
-  success "Created snapshot `highlight $snapshot_name`"
+  doctl compute droplet-action snapshot "$droplet_id" --wait --snapshot-name $snapshot_name > /dev/null
+  local res=$?
+
+  if [ $res = 0 ]; then
+    success "Created snapshot `highlight $snapshot_name`"
+  else
+    error "Could not create snapshot"
+    exit 1
+  fi
 }
 
 delete_droplet () {
@@ -207,11 +214,14 @@ down () {
     exit 0
   fi
 
-  create_snapshot
-  delete_droplet $droplet_id
+  if create_snapshot; then
+    delete_droplet $droplet_id
 
-  if [ -n $existing_snapshot ]; then
-    delete_snapshot $existing_snapshot
+    if [ -n $existing_snapshot ]; then
+      delete_snapshot $existing_snapshot
+    fi
+  else
+    exit 1
   fi
 }
 
