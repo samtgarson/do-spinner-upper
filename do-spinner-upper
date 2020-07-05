@@ -4,13 +4,14 @@ colors
 
 ## Begin parsing arguments
 
-zparseopts -D -E -- -name:=name -ip:=floating_ip -size:=droplet_size -region:=region -help:=help
+zparseopts -D -E -- -name:=name -ip:=floating_ip -size:=droplet_size -region:=region -key:=ssh_key -help:=help
 
 cmd=$1
 name=$name[2]
 floating_ip=$floating_ip[2]
 droplet_size=$droplet_size[2]
 region=$region[2]
+ssh_key=$ssh_key[2]
 
 snapshot_name="$name-snapshot"
 
@@ -53,6 +54,7 @@ create_droplet () {
     --image $image \
     --size $droplet_size \
     --region $region \
+    --ssh-keys $ssh_key \
     --wait \
     --enable-monitoring \
     --output json \
@@ -205,9 +207,10 @@ help () {
   echo ''
   echo 'Flags:'
   echo '  --name    name'
-  echo '  --ip      floating IP'
-  echo '  --size    droplet size'
-  echo '  --region  region'
+  echo '  --ip      floating IP  (doctl compute floating-ip list)'
+  echo '  --size    droplet size (doctl compute size list)'
+  echo '  --region  region       (doctl compute region list)'
+  echo '  --key     SSH key ID   (doctl compute ssh-key list)'
 }
 
 run () {
