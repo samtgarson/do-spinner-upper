@@ -1,4 +1,5 @@
 #!/usr/bin/env zsh
+set -eo pipefail
 autoload -U colors
 colors
 
@@ -30,7 +31,7 @@ l () {
 }
 
 error () {
-  l "${fg[red]}error$fg_no_bold[default] $1"
+  l "${fg[red]}error$fg_no_bold[default] $1" > /dev/tty
 }
 
 warning () {
@@ -46,11 +47,22 @@ highlight () {
 }
 
 get_snapshot () {
-  doctl compute image list -ojson | jq --arg name $snapshot_name '.[] | select(.name == $name).id' -r
+  doctl compute image list -ojson | jq --arg name $snapshot_name '[.[] | select(.name == $name).id][0]' -r
+}
+
+validate () {
+  local error=$(jq 'if type=="object" and .errors then .errors[0].detail else "Unknown error" end' -r <<< $1)
+  local id=$(jq 'if type=="array" then .[0].id else "empty" end' -r <<< $1)
+
+  if [ $error != "Unknown error" ] || [ $id = "empty" ]; then
+    error "$error"
+    exit 1
+  fi
+  echo $id
 }
 
 create_droplet () {
-  doctl compute droplet create \
+  local res=$(doctl compute droplet create \
     --image $image \
     --size $droplet_size \
     --region $region \
@@ -58,7 +70,14 @@ create_droplet () {
     --wait \
     --enable-monitoring \
     --output json \
-    $name | jq '.[0].id' -r
+    $name)
+  local id
+
+  if id=$(validate $res); then
+    echo $id
+  else
+    exit 1
+  fi
 }
 
 existing_droplet () {
@@ -69,13 +88,8 @@ assign_ip () {
   l "Assigning IP `highlight $floating_ip` to droplet `highlight $1`"
   local res=$(doctl compute floating-ip-action assign $floating_ip $1 -o json)
 
-  local error=$(jq 'if type=="object" and .errors then .errors[0].detail else "Unknown error" end' -r <<< $res)
-  local op_id=$(jq 'if type=="array" then .[0].id else "empty" end' -r <<< $res)
-  if [ $error != "Unknown error" ] || [ $op_id = "empty" ]; then
-    error "$error"
-    l "Failed command: \`doctl compute floating-ip-action assign $floating_ip $1 -o json\`"
-    exit 1
-  fi
+  local op_id
+  if ! op_id=$(validate $res); then exit 1; fi
 
   get_status () {
     doctl compute floating-ip-action get $floating_ip $op_id -o json | jq '.[0].status' -r
@@ -111,14 +125,14 @@ power_down () {
 
 check_status () {
   if [ -z $1 ]; then
-    echo 'Could not find existing droplet'
+    error 'Could not find existing droplet'
     exit 1
   fi
 
   if [ $(droplet_status $1) = "active" ]; then
     warning "Your droplet should be powered down before snapshotting."
     if read -q "?$prompt Do you want to power down your droplet? (y/N) "; then
-      echo ''
+      echo
       l "Powering down droplet `highlight $1`"
       power_down $1
     else
@@ -158,7 +172,7 @@ up () {
       l "Using snapshot `highlight $image`"
     fi
 
-    droplet_id="$(create_droplet $image)"
+    if ! droplet_id="$(create_droplet $image)"; then exit 1; fi
 
     success "Created droplet `highlight $droplet_id`"
   else
@@ -170,7 +184,7 @@ up () {
     assign_ip $droplet_id
   fi
 
-  echo ''
+  echo
   l "Use `highlight "doctl compute ssh $droplet_id"` to login to your new droplet!"
 }
 
@@ -178,10 +192,10 @@ down () {
   local existing_snapshot=$(get_snapshot)
   local droplet_id=$(existing_droplet)
 
-  check_status $droplet_id
+  check_status $droplet_id || exit 1
 
   if read -q "confirm_delete?$prompt Are you sure you want to delete droplet `highlight $droplet_id`? (y/N) "; then
-    echo ''
+    echo
   else
     echo $confirm_delete
     exit 0
@@ -197,14 +211,14 @@ down () {
 
 help () {
   echo 'spinner-upper is a command line tool to automatically spin up and down Digital Ocean droplets'
-  echo ''
+  echo
   echo 'Usage:'
   echo '  spinner-upper <command> [flags]'
-  echo ''
+  echo
   echo 'Available commands:'
   echo '  up    Create a new droplet from the last snapshot'
   echo '  down  Save a snapshot and destroy the droplet'
-  echo ''
+  echo
   echo 'Flags:'
   echo '  --name    name'
   echo '  --ip      floating IP  (doctl compute floating-ip list)'
