@@ -1,4 +1,6 @@
 #!/usr/bin/env zsh
+autoload -U colors
+colors
 
 ## Begin parsing arguments
 
@@ -20,7 +22,29 @@ fi
 
 ## End parsing arguments
 
-snapshot_id () {
+# log
+prompt="$fg_bold[black]>$fg_no_bold[default]"
+l () {
+  echo "$prompt $1"
+}
+
+error () {
+  l "${fg[red]}error$fg_no_bold[default] $1"
+}
+
+warning () {
+  l "${fg[magenta]}warning$fg_no_bold[default] $1"
+}
+
+success () {
+  l "${fg[green]}✔$fg_no_bold[default] $1"
+}
+
+highlight () {
+  echo "$fg_no_bold[yellow]$1$fg_no_bold[default]"
+}
+
+get_snapshot () {
   doctl compute image list -ojson | jq --arg name $snapshot_name '.[] | select(.name == $name).id' -r
 }
 
@@ -40,14 +64,14 @@ existing_droplet () {
 }
 
 assign_ip () {
-  echo "Assigning IP $floating_ip to droplet $1"
+  l "Assigning IP `highlight $floating_ip` to droplet `highlight $1`"
   local res=$(doctl compute floating-ip-action assign $floating_ip $1 -o json)
 
-  local error=$(echo $res | jq 'if type=="object" and .errors then .errors[0].detail else "Unknown error" end' -r)
-  local op_id=$(echo $res | jq 'if type=="array" then .[0].id else "empty" end' -r)
-  if [ $error != "Unknown error" || $op_id = "empty" ]; then
-    echo "$error"
-    echo "Failed command: \`doctl compute floating-ip-action assign $floating_ip $1 -o json\`"
+  local error=$(jq 'if type=="object" and .errors then .errors[0].detail else "Unknown error" end' -r <<< $res)
+  local op_id=$(jq 'if type=="array" then .[0].id else "empty" end' -r <<< $res)
+  if [ $error != "Unknown error" ] || [ $op_id = "empty" ]; then
+    error "$error"
+    l "Failed command: \`doctl compute floating-ip-action assign $floating_ip $1 -o json\`"
     exit 1
   fi
 
@@ -60,42 +84,17 @@ assign_ip () {
   for i in {1..5}; do
     sleep 1
     assign_status=$(get_status)
-    echo "IP assignment $assign_status"
 
-    if [ "$assign_status" = "completed" ]; then break; fi
+    if [ "$assign_status" = "completed" ]; then
+      break
+    else
+      success "IP `highlight $floating_ip` Assigned"
+    fi
   done
 
   if [ "$assign_status" != "completed" ]; then
-    echo "IP Assignment incomplete"
+    error "IP Assignment incomplete"
     exit 1
-  fi
-}
-
-up () {
-  local existing_droplet=$(existing_droplet)
-  local droplet_id
-
-  if [ -z $existing_droplet ]; then
-    echo "Creating $name droplet"
-    local image=$(snapshot_id)
-
-    if [ -z $image ]; then
-      echo "Could not find snapshot"
-      exit 1
-    else
-      echo "Using snapshot $image"
-    fi
-
-    droplet_id="$(create_droplet $image)"
-
-    echo "Created droplet $droplet_id"
-  else
-    droplet_id="$existing_droplet"
-    echo "Using droplet $droplet_id"
-  fi
-
-  if [ -n "$floating_ip" ]; then
-    assign_ip $droplet_id
   fi
 }
 
@@ -105,7 +104,7 @@ droplet_status () {
 
 power_down () {
   doctl compute droplet-action power-off $1 --wait -ojson > /dev/null
-  echo "Powered down droplet $1"
+  l "Powered down droplet `highlight $1`"
 }
 
 check_status () {
@@ -115,7 +114,10 @@ check_status () {
   fi
 
   if [ $(droplet_status $1) = "active" ]; then
-    if read -q "confirm_power?Do you want to power down your droplet? (y/N) "; then
+    warning "Your droplet should be powered down before snapshotting."
+    if read -q "?$prompt Do you want to power down your droplet? (y/N) "; then
+      echo ''
+      l "Powering down droplet `highlight $1`"
       power_down $1
     else
       exit 1
@@ -124,30 +126,62 @@ check_status () {
 }
 
 create_snapshot () {
-  echo "Creating snapshot (this could take a few minutes...)"
+  l "Creating snapshot (this could take a few minutes...)"
   doctl compute droplet-action snapshot $droplet_id --wait --snapshot-name $snapshot_name > /dev/null
-  echo "Created snapshot $snapshot_name"
+  success "Created snapshot `highlight $snapshot_name`"
 }
 
 delete_droplet () {
   doctl compute droplet delete $1 --force
-  echo "Deleted droplet $1"
+  success "Deleted droplet `highlight $1`"
 }
 
 delete_snapshot () {
   doctl compute image delete $1 --force
-  echo "Deleted snapshot $1"
+  success "Deleted snapshot `highlight $1`"
+}
+
+up () {
+  local existing_droplet=$(existing_droplet)
+  local droplet_id
+
+  if [ -z $existing_droplet ]; then
+    l "Creating $name droplet"
+    local image=$(get_snapshot)
+
+    if [ -z $image ]; then
+      error "Could not find snapshot"
+      exit 1
+    else
+      l "Using snapshot `highlight $image`"
+    fi
+
+    droplet_id="$(create_droplet $image)"
+
+    success "Created droplet `highlight $droplet_id`"
+  else
+    droplet_id="$existing_droplet"
+    l "Using droplet `highlight $droplet_id`"
+  fi
+
+  if [ -n "$floating_ip" ]; then
+    assign_ip $droplet_id
+  fi
+
+  echo ''
+  l "Use `highlight "doctl compute ssh $droplet_id"` to login to your new droplet!"
 }
 
 down () {
-  local existing_snapshot=$(snapshot_id)
+  local existing_snapshot=$(get_snapshot)
   local droplet_id=$(existing_droplet)
 
   check_status $droplet_id
 
-  if read -q "confirm_delete?Are you sure you want to delete droplet $droplet_id? (y/N) "; then
+  if read -q "confirm_delete?$prompt Are you sure you want to delete droplet `highlight $droplet_id`? (y/N) "; then
     echo ''
   else
+    echo $confirm_delete
     exit 0
   fi
 
@@ -177,26 +211,31 @@ help () {
 }
 
 run () {
+  if [[ -z "$(command -v doctl)" ]]; then
+    error "Install `highlight "doctl"` to continue"
+    exit 1
+  fi
+
   if $help || [ -z $cmd ] || [ $cmd = "--help" ]; then help
   elif [ "$cmd" = "up" ]; then
     if [ -z $name ] \
     || [ -z $droplet_size ] \
     || [ -z $region ]
     then
-      echo '--name, --size & --region arguments required. Use --help to learn more'
+      error '--name, --size & --region arguments required. Use --help to learn more'
     else
       up
     fi
   elif [ "$cmd" = "down" ]; then
     if [ -z $name ]
     then
-      echo '--name argument required. Use --help to learn more'
+      error '--name argument required. Use --help to learn more'
     else
       down
     fi
   else
-    echo "Command $cmd not recognised."
-    echo 'Use --help flag to learn more.'
+    error "Command $cmd not recognised."
+    l 'Use --help flag to learn more.'
   fi
 }
 
