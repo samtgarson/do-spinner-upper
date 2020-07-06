@@ -1,7 +1,7 @@
 <p align="center">
 💦
 
-<p align="center"><strong>digital-ocean-spinner-upper</strong><em>—a utility to save and recreate DO droplets</em></p>
+<p align="center"><strong>do-spinner-upper</strong><em>—a utility to save and recreate <a href="https://www.digitalocean.com/products/droplets/">Digital Ocean droplets</a></em></p>
 
 <p align="center">spinner-upper is a small command line tool to automatically spin up and down your Digital Ocean droplets while maintaining state—as if you'd never shut them down.</p>
 
@@ -26,7 +26,7 @@ It will:
   do-spinner-upper <command> [flags]
 ```
 
-_Tip: start with an existing droplet and run `down`—this utility relies on creating it's own snapshots._
+_Tip: start with an existing droplet and run `down`—this utility relies on creating its own snapshots._
 
 #### Available commands:
 ```
